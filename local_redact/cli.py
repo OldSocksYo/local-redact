@@ -11,11 +11,12 @@ import tempfile
 import traceback
 from pathlib import Path
 
-from local_redact.convert import DocConversionError, WordSession
+from local_redact.convert import ConversionError, SheetSession, WordSession
 from local_redact.docx_redact import DocxError, redact_docx
 from local_redact.mapping import MappingBook
-from local_redact.names import OutputNames, redact_relative
+from local_redact.names import EXCEL_SUFFIXES, WORD_SUFFIXES, OutputNames, output_suffix, redact_relative
 from local_redact.textutil import Redactor, load_lexicon
+from local_redact.xlsx_redact import XlsxError, redact_xlsx
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -31,22 +32,23 @@ def _load_secret(path: Path) -> bytes:
     return data
 
 
-def _is_word_document(path: Path) -> bool:
-    return path.is_file() and path.suffix.lower() in {".doc", ".docx"} and not path.name.startswith("~$")
+def _is_office_document(path: Path) -> bool:
+    suffix = path.suffix.lower()
+    return path.is_file() and suffix in WORD_SUFFIXES | EXCEL_SUFFIXES and not path.name.startswith("~$")
 
 
 def _collect_documents(src: Path) -> list[Path]:
     if src.is_file():
-        return [src] if _is_word_document(src) else []
-    return sorted(path for path in src.rglob("*") if _is_word_document(path))
+        return [src] if _is_office_document(src) else []
+    return sorted(path for path in src.rglob("*") if _is_office_document(path))
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="local_redact",
-        description="本地脱敏 Word 报告。保留检测数值和标准号，去掉身份、地址、坐标、图片、水印，并脱敏输出文件名。",
+        description="本地脱敏 Word 报告和 Excel 表格。保留检测数值和标准号，去掉身份、地址、坐标、图片、水印，并脱敏输出文件名。",
     )
-    parser.add_argument("src", type=Path, help="一份 .doc / .docx，或一个文件夹")
+    parser.add_argument("src", type=Path, help="一份 Word / Excel，或一个文件夹")
     parser.add_argument(
         "-o",
         "--output",
@@ -122,6 +124,43 @@ def _configure_stdio() -> None:
             pass
 
 
+def _redact_one(
+    path: Path,
+    dest: Path,
+    tmp_dir: Path,
+    index: int,
+    redactor: Redactor,
+    word: WordSession | None,
+    word_startup_error: str,
+    excel: SheetSession | None,
+    excel_startup_error: str,
+) -> dict[str, int]:
+    source = path
+    converted: Path | None = None
+    kind = path.suffix.lower()
+    try:
+        if kind == ".doc":
+            if word is None:
+                raise ConversionError(word_startup_error or "没有检测到可用的 Word 或 WPS，无法转换 .doc。")
+            converted = tmp_dir / f"conv-{index}.docx"
+            word.convert(path, converted)
+            source = converted
+            return redact_docx(source, dest, redactor)
+        if kind == ".xls":
+            if excel is None:
+                raise ConversionError(excel_startup_error or "没有检测到可用的 Excel 或 WPS 表格，无法转换 .xls。")
+            converted = tmp_dir / f"conv-{index}.xlsx"
+            excel.convert(path, converted)
+            source = converted
+            return redact_xlsx(source, dest, redactor)
+        if kind in EXCEL_SUFFIXES:
+            return redact_xlsx(source, dest, redactor)
+        return redact_docx(source, dest, redactor)
+    finally:
+        if converted is not None and converted.exists():
+            converted.unlink()
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
     args = _build_parser().parse_args(argv)
@@ -159,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
 
     files = _collect_documents(src)
     if not files:
-        print("没有找到 .doc 或 .docx 文件。", file=sys.stderr)
+        print("没有找到 Word 或 Excel 文件。", file=sys.stderr)
         return 1
 
     try:
@@ -178,36 +217,47 @@ def main(argv: list[str] | None = None) -> int:
     ok = 0
     failed = 0
     word: WordSession | None = None
+    excel: SheetSession | None = None
     word_startup_error = ""
+    excel_startup_error = ""
     if any(path.suffix.lower() == ".doc" for path in files):
         word = WordSession()
         try:
             word.start()
-        except DocConversionError as exc:
+        except ConversionError as exc:
             word_startup_error = str(exc)
             word = None
+    if any(path.suffix.lower() == ".xls" for path in files):
+        excel = SheetSession()
+        try:
+            excel.start()
+        except ConversionError as exc:
+            excel_startup_error = str(exc)
+            excel = None
     try:
         tmp_dir.mkdir(exist_ok=True)
         for index, path in enumerate(files, start=1):
             relative = path.relative_to(src) if src.is_dir() else Path(path.name)
-            fd, tmp_name = tempfile.mkstemp(prefix="part-", suffix=".docx", dir=tmp_dir)
+            fd, tmp_name = tempfile.mkstemp(prefix="part-", suffix=output_suffix(path.name), dir=tmp_dir)
             os.close(fd)
             tmp_path = Path(tmp_name)
-            converted: Path | None = None
             try:
-                source = path
-                if path.suffix.lower() == ".doc":
-                    if word is None:
-                        raise DocConversionError(word_startup_error)
-                    converted = tmp_dir / f"conv-{index}.docx"
-                    word.convert(path, converted)
-                    source = converted
-                stats = redact_docx(source, tmp_path, redactor)
+                stats = _redact_one(
+                    path,
+                    tmp_path,
+                    tmp_dir,
+                    index,
+                    redactor,
+                    word,
+                    word_startup_error,
+                    excel,
+                    excel_startup_error,
+                )
                 redacted = names.place(relative, redact_relative(relative, redactor))
                 dest = output / redacted
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 os.replace(tmp_path, dest)
-            except (DocxError, DocConversionError) as exc:
+            except (DocxError, XlsxError, ConversionError) as exc:
                 failed += 1
                 print(f"[{index}/{len(files)}] 失败 {relative}：{exc}")
                 continue
@@ -219,8 +269,6 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 if tmp_path.exists():
                     tmp_path.unlink()
-                if converted is not None and converted.exists():
-                    converted.unlink()
             mapping.remember_file(relative.as_posix(), redacted.as_posix())
             ok += 1
             print(
@@ -230,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if word is not None:
             word.close()
+        if excel is not None:
+            excel.close()
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     mapping.save()

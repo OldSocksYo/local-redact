@@ -1,4 +1,7 @@
-"""用本机 WPS 或 Microsoft Word 把旧版 .doc 转成临时 .docx。不改原稿。"""
+"""用本机 Office 把旧格式转成临时的 Open XML。不改原稿。
+
+.doc 用 WPS 或 Word 转成 .docx。.xls 用 WPS 表格或 Excel 转成 .xlsx。
+"""
 
 from __future__ import annotations
 
@@ -12,9 +15,17 @@ _WD_DO_NOT_SAVE_CHANGES = 0
 _MSO_AUTOMATION_SECURITY_FORCE_DISABLE = 3
 # WPS 有时会把 Word.Application 登记成会卡住的入口，所以先试 KWPS.Application。
 _PROG_IDS = ("KWPS.Application", "Word.Application")
+# 表格同理：先试 WPS 的表格进程，再试 Excel。Excel.Application 若实际指向 WPS，会卡住。
+_SHEET_PROG_IDS = ("Ket.Application", "ET.Application", "Excel.Application")
+# 另存为 xlsx，不保留宏。
+_XL_OPENXML_WORKBOOK = 51
 
 
-class DocConversionError(Exception):
+class ConversionError(Exception):
+    pass
+
+
+class DocConversionError(ConversionError):
     pass
 
 
@@ -138,3 +149,95 @@ def _registry_value(root, path: str) -> str:
     except OSError:
         return ""
     return str(value)
+
+
+class SheetSession:
+    """单独开一个 WPS 表格或 Excel 进程，把 .xls 转成临时 .xlsx。"""
+
+    def __init__(self) -> None:
+        self._app = None
+        self._com_ready = False
+
+    def start(self) -> None:
+        try:
+            import pythoncom
+            import win32com.client  # noqa: F401
+        except ImportError as exc:
+            raise ConversionError("缺少 pywin32。请先执行：python -m pip install pywin32") from exc
+        pythoncom.CoInitialize()
+        self._com_ready = True
+        try:
+            app = _dispatch_sheet()
+        except ConversionError:
+            self.close()
+            raise
+        except Exception as exc:
+            self.close()
+            raise ConversionError("没有检测到可用的 Excel 或 WPS 表格，无法转换 .xls。") from exc
+        _quiet_app(app)
+        self._app = app
+
+    def convert(self, src: Path, dest: Path) -> None:
+        if self._app is None:
+            raise ConversionError("Excel 尚未启动。")
+        workbook = None
+        try:
+            workbook = self._app.Workbooks.Open(str(src.resolve()), 0, True)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest.exists():
+                dest.unlink()
+            workbook.SaveAs(str(dest.resolve()), _XL_OPENXML_WORKBOOK)
+            try:
+                workbook.Saved = True
+            except Exception:
+                pass
+        except ConversionError:
+            raise
+        except Exception as exc:
+            raise ConversionError("无法转成 xlsx，文件可能已加密或已损坏。") from exc
+        finally:
+            if workbook is not None:
+                try:
+                    workbook.Close(False)
+                except Exception:
+                    pass
+
+    def close(self) -> None:
+        if self._app is not None:
+            try:
+                _quiet_app(self._app)
+                self._app.Quit()
+            except Exception:
+                pass
+            self._app = None
+        if self._com_ready:
+            import pythoncom
+
+            pythoncom.CoUninitialize()
+            self._com_ready = False
+
+
+def _quiet_app(app) -> None:
+    for name, value in (("DisplayAlerts", False), ("Visible", False)):
+        try:
+            setattr(app, name, value)
+        except Exception:
+            pass
+    try:
+        app.AutomationSecurity = _MSO_AUTOMATION_SECURITY_FORCE_DISABLE
+    except Exception:
+        pass
+
+
+def _dispatch_sheet():
+    import win32com.client
+
+    for prog_id in _SHEET_PROG_IDS:
+        server = _local_server(prog_id).lower()
+        if prog_id == "Excel.Application" and ("et.exe" in server or "wps.exe" in server):
+            continue
+        try:
+            return win32com.client.DispatchEx(prog_id)
+        except Exception:
+            continue
+    raise ConversionError("没有检测到可用的 Excel 或 WPS 表格，无法转换 .xls。")

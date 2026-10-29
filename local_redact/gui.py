@@ -35,6 +35,7 @@ _AUTO_TYPES_TEXT = """不依赖词表也会自动处理：
 · 编号类：项目/合同/许可证号、统一社会信用代码（邮编、报告编号/文号、点位编号、样品编号保留）
 · 格式类：手机与固话（含空格、短横线、括号分组）、经纬度与东/北坐标等坐标列、身份证、银行卡、邮箱、网址、内网 IP、密钥类字符串
 · 一律删除：图片、公章、签名、二维码、水印、背景图、首页缩略图、嵌入对象；批注和修订里的作者、模板本机路径同样处理
+· Excel 同样处理工作表（含隐藏表）、工作表名、页眉页脚、批注和文档属性；图片、宏、数据透视缓存和外部链接会去掉。结果是 .xlsx
 需写入词表：客户简称、不在上述栏位里的两三字人名、无标签的页脚地址/英文机构名、裸域名等"""
 
 _HELP_TEXT = f"""会去掉什么
@@ -48,7 +49,7 @@ _HELP_TEXT = f"""会去掉什么
 
 处理过程中
 
-不要关闭窗口。关闭会中断本次处理，正在转换的 Word 或 WPS 也可能停在半截。
+不要关闭窗口。关闭会中断本次处理，正在转换的 Word、Excel 或 WPS 也可能停在半截。
 """
 
 _STATUS_BUSY = ("#1A5276", "#85C1E9")
@@ -402,7 +403,7 @@ class App(ctk.CTk):
     def _on_close(self) -> None:
         if self._busy and not messagebox.askyesno(
             "正在脱敏",
-            "脱敏还在进行。关闭窗口会中断本次处理，Word 或 WPS 也可能停在半截。\n\n确定关闭？",
+            "脱敏还在进行。关闭窗口会中断本次处理，Word、Excel 或 WPS 也可能停在半截。\n\n确定关闭？",
             parent=self,
             default=messagebox.NO,
         ):
@@ -413,9 +414,11 @@ class App(ctk.CTk):
         if self._busy:
             return
         path = filedialog.askopenfilename(
-            title="选择 Word 报告",
+            title="选择 Word 或 Excel",
             filetypes=[
+                ("Word 和 Excel", "*.doc *.docx *.xls *.xlsx *.xlsm"),
                 ("Word 文档", "*.doc *.docx"),
+                ("Excel 表格", "*.xls *.xlsx *.xlsm"),
                 ("全部文件", "*.*"),
             ],
         )

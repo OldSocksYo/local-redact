@@ -1,4 +1,4 @@
-﻿"""输出路径里的文件名和目录名。扩展名保持 .docx。"""
+﻿"""输出路径里的文件名和目录名。Word 写成 .docx，Excel 写成 .xlsx。"""
 
 from __future__ import annotations
 
@@ -19,6 +19,14 @@ _RESERVED = {
     *(f"LPT{i}" for i in range(1, 10)),
 }
 _MAX_PART = 80
+EXCEL_SUFFIXES = {".xls", ".xlsx", ".xlsm"}
+WORD_SUFFIXES = {".doc", ".docx"}
+
+
+def output_suffix(filename: str) -> str:
+    if Path(filename).suffix.lower() in EXCEL_SUFFIXES:
+        return ".xlsx"
+    return ".docx"
 
 
 def sanitize_part(text: str) -> str:
@@ -39,7 +47,7 @@ def redact_relative(relative: Path, redactor: Redactor) -> Path:
         is_file = index == len(raw_parts) - 1
         if is_file:
             stem = sanitize_part(redactor.redact_string(Path(part).stem)) or "报告"
-            redacted.append(f"{stem}.docx")
+            redacted.append(f"{stem}{output_suffix(part)}")
         else:
             redacted.append(sanitize_part(redactor.redact_string(part)) or "目录")
     return Path(*redacted)
