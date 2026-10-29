@@ -403,6 +403,66 @@ class FieldRedactTests(unittest.TestCase):
         self.assertIn("人员_", redactor.apply_rule(mixed, rule))
         self.assertNotIn("李伟", redactor.apply_rule(mixed, rule))
 
+    def test_serial_column_still_redacts_staff_and_modern_surnames(self) -> None:
+        from local_redact.docx_redact import _redact_tables
+        from local_redact.fields import HEADER_WORDS
+
+        redactor = self._redactor()
+        root = etree.Element(q(W, "document"))
+        body = etree.SubElement(root, q(W, "body"))
+        body.append(
+            table(
+                row("序号", "样品编号", "检测项目", "结果", "采样人员"),
+                row("1", "S2024-001", "化学需氧量", "35.2", "李伟"),
+                row("2", "S2024-002", "pH", "7.26", "肖强"),
+                row("3", "S2024-003", "氨氮", "0.12", "闫丽"),
+                row("4", "S2024-004", "总磷", "0.08", "付伟"),
+                row("5", "S2024-005", "总氮", "1.10", "王芳"),
+            )
+        )
+        _redact_tables(root, redactor)
+        joined = "".join(node.text or "" for node in root.iter(q(W, "t")))
+        for secret in ("李伟", "肖强", "闫丽", "付伟", "王芳"):
+            self.assertNotIn(secret, joined, secret)
+        self.assertIn("人员_", joined)
+        self.assertIn("S2024-001", joined)
+        self.assertIn("35.2", joined)
+        self.assertIn("序号", HEADER_WORDS)
+        self.assertIn("样品编号", HEADER_WORDS)
+
+    def test_projected_coordinate_column_keeps_results(self) -> None:
+        from local_redact.docx_redact import _redact_tables
+        from local_redact.fields import COLUMN_RULES
+
+        redactor = self._redactor()
+        root = etree.Element(q(W, "document"))
+        body = etree.SubElement(root, q(W, "body"))
+        body.append(
+            table(
+                row("点位", "东坐标", "北坐标", "结果"),
+                row("厂界", "3456789.12", "567890.34", "35.2"),
+            )
+        )
+        _redact_tables(root, redactor)
+        joined = "".join(node.text or "" for node in root.iter(q(W, "t")))
+        self.assertNotIn("3456789.12", joined)
+        self.assertNotIn("567890.34", joined)
+        self.assertIn("[坐标已移除]", joined)
+        self.assertIn("35.2", joined)
+        self.assertIn("高斯坐标", COLUMN_RULES)
+
+    def test_cover_labels(self) -> None:
+        redactor = self._redactor()
+        text = (
+            "法定代表人：李伟。项目负责人：肖强。"
+            "送样单位：杭州示例环保科技有限公司。企业名称：示例企业有限公司。客户名称：示例客户。"
+        )
+        out = redactor.redact_string(text)
+        for secret in ("李伟", "肖强", "杭州示例环保科技有限公司", "示例企业有限公司", "示例客户"):
+            self.assertNotIn(secret, out, secret)
+        self.assertIn("人员_", out)
+        self.assertIn("机构_", out)
+
 
 class ReportRedactTests(unittest.TestCase):
     def test_redacts_environmental_report(self) -> None:

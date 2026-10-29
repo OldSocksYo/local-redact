@@ -56,6 +56,11 @@ FORM_LABELS: dict[str, Rule] = {
     "施工单位": _org(),
     "监理单位": _org(),
     "分包单位": _org(),
+    "送样单位": _org(),
+    "送检单位": _org(),
+    "客户名称": _org(),
+    "客户单位": _org(),
+    "企业名称": _org(),
     "项目名称": Rule(prefix="项目"),
     "企业地址": _addr(),
     "单位地址": _addr(),
@@ -81,6 +86,14 @@ FORM_LABELS: dict[str, Rule] = {
     "签发人": _person(),
     "批准人": _person(),
     "授权签字人": _person(),
+    "法定代表人": _person(),
+    "法人代表": _person(),
+    "项目负责人": _person(),
+    "现场负责人": _person(),
+    "企业陪同人": _person(),
+    "企业陪同人员": _person(),
+    "陪同人员": _person(),
+    "陪同人": _person(),
     # 太短，只认表格里单独一格，不在正文句子里匹配
     "编制": _person(inline=False),
     "审核": _person(inline=False),
@@ -108,6 +121,9 @@ COLUMN_RULES: dict[str, Rule] = {
     "监测人员": _person(),
     "采样/检测人员": _person(),
     "采样/监测人员": _person(),
+    "采样人": _person(),
+    "检测人": _person(),
+    "监测人": _person(),
     "人员": _person(inline=False),
     "经纬度": _coord(),
     "地理坐标": _coord(),
@@ -115,13 +131,29 @@ COLUMN_RULES: dict[str, Rule] = {
     "坐标": _coord(),
     "经度": _coord(),
     "纬度": _coord(),
+    # 纯小数平面坐标只在这些列去掉，不在正文里扫长数字
+    "东坐标": _coord(),
+    "北坐标": _coord(),
+    "横坐标": _coord(),
+    "纵坐标": _coord(),
+    "X坐标": _coord(),
+    "Y坐标": _coord(),
+    "x坐标": _coord(),
+    "y坐标": _coord(),
+    "高斯坐标": _coord(),
+    "平面坐标": _coord(),
+    "大地坐标": _coord(),
 }
 
 LABELS: dict[str, Rule] = {**FORM_LABELS, **COLUMN_RULES}
 
 # 结果表的表头。整行每个非空格都是表头时，才按列处理，避免把「委托单位 | 公司名」当成表头。
+# 「序号」「样品编号」也算表头，否则人员列只会打到表头正下方那一格。
 RESULT_HEADERS = frozenset(
     {
+        "序号",
+        "样品编号",
+        "样品名称",
         "检测项目",
         "监测项目",
         "分析项目",
@@ -141,7 +173,12 @@ RESULT_HEADERS = frozenset(
         "检出限",
         "最低检出限",
         "方法依据",
+        "方法标准",
         "检测方法",
+        "仪器",
+        "仪器名称",
+        "仪器型号",
+        "仪器编号",
         "分析标准",
         "评价标准",
         "执行标准",
@@ -172,6 +209,8 @@ RESULT_HEADERS = frozenset(
         "采样/检测位置",
         "采样/监测位置",
         "备注",
+        "是否达标",
+        "达标情况",
     }
 )
 

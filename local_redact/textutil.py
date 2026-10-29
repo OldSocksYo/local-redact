@@ -31,6 +31,8 @@ _SURNAMES = frozenset(
     "国文寇广禄阙东欧殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾毋沙乜养鞠须丰"
     "巢关蒯相查後荆红游竺权逯盖益桓公"
 )
+# 证件上常见、但《百家姓》写成另一个字的姓：肖/萧、闫/阎、付/傅。
+_SURNAMES = _SURNAMES | frozenset("肖闫付覃丘涂朴麦佟冼")
 _COMPOUND_SURNAMES = frozenset(
     {
         "欧阳",
