@@ -855,6 +855,50 @@ class ReportRedactTests(unittest.TestCase):
             self.assertIn("Traceback", err.getvalue())
             self.assertIn("boom", err.getvalue())
 
+    def test_mapping_rows_for_display(self) -> None:
+        from local_redact.gui import _filter_mapping_rows, _read_mapping_rows
+
+        with tempfile.TemporaryDirectory() as folder:
+            missing, error = _read_mapping_rows(Path(folder) / "missing.json")
+            self.assertEqual(missing, [])
+            self.assertIsNone(error)
+
+            path = Path(folder) / "mapping.json"
+            path.write_text("  ", encoding="utf-8")
+            empty, error = _read_mapping_rows(path)
+            self.assertEqual(empty, [])
+            self.assertIsNone(error)
+
+            path.write_text("{", encoding="utf-8")
+            broken, error = _read_mapping_rows(path)
+            self.assertEqual(broken, [])
+            self.assertIn("不是合法 JSON", error or "")
+
+            book = MappingBook(path)
+            book.remember_file("原稿.docx", "副本.docx")
+            book.remember("机构_abcd", "某公司")
+            book.drop("电话", "13800138000")
+            book.save()
+            rows, error = _read_mapping_rows(path)
+            self.assertIsNone(error)
+            self.assertEqual(
+                rows,
+                [
+                    ("文件名", "副本.docx", "原稿.docx"),
+                    ("代号", "机构_abcd", "某公司"),
+                    ("已移除", "[电话已移除]", "13800138000"),
+                ],
+            )
+            book.clear()
+            cleared = MappingBook(path)
+            cleared.load()
+            self.assertEqual(cleared.tokens, {})
+            self.assertEqual(cleared.files, {})
+            self.assertEqual(cleared.removed, {})
+            self.assertEqual(_filter_mapping_rows(rows, "代号", "某"), [rows[1]])
+            self.assertEqual(_filter_mapping_rows(rows, "已移除", "机构"), [])
+            self.assertEqual(_filter_mapping_rows(rows, "全部", "138"), [rows[2]])
+
     def test_rejects_legacy_doc(self) -> None:
         redactor = Redactor([], b"0123456789abcdef", MappingBook(Path("mapping.json")))
         with self.assertRaises(DocxError):

@@ -49,6 +49,13 @@ class MappingBook:
         }
         self.path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def clear(self) -> None:
+        """丢掉已记录的原文、代号和文件名对应，并写回文件。"""
+        self.tokens.clear()
+        self.removed.clear()
+        self.files.clear()
+        self.save()
+
     def token_for(self, prefix: str, original: str, secret: bytes) -> str:
         digest = hmac.new(secret, f"{prefix}\n{original}".encode("utf-8"), hashlib.sha256).hexdigest()[:8]
         token = f"{prefix}_{digest}"
