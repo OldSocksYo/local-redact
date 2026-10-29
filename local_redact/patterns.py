@@ -29,9 +29,21 @@ _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _URL = re.compile(r"https?://[^\s<>\"']+")
 _ID_CARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
 _USCC = re.compile(r"(?<![0-9A-Z])[0-9A-Z]{18}(?![0-9A-Z])")
-# 前后都不能是字母/数字，避免仪器编号里「S138…」「NB023…」这类片段被当成电话
+# 连续号码。前后都不能是字母/数字，避免仪器编号里「S138…」「NB023…」被当成电话。
 _MOBILE = re.compile(r"(?<![A-Za-z0-9])(?:\+?86[-\s]?)?1[3-9]\d{9}(?![A-Za-z0-9])")
 _LANDLINE = re.compile(r"(?<![A-Za-z0-9])0\d{2,3}[-\s]?\d{7,8}(?![A-Za-z0-9])")
+# 分组写法必须带分隔符或括号；数字个数校验通过才打码，不放宽上面的连续数字规则。
+_PHONE_SEP = r"[ \t\u3000\-－—]"
+_GROUPED_PHONE = re.compile(
+    rf"(?<![A-Za-z0-9])"
+    rf"(?:\+?86{_PHONE_SEP}+)?"
+    rf"(?:"
+    rf"[（(]0\d{{2,3}}[）)]{_PHONE_SEP}?(?:\d{{7,8}}|\d{{3,4}}{_PHONE_SEP}\d{{3,4}})"
+    rf"|1[3-9]\d(?:{_PHONE_SEP}\d{{2,4}}){{1,3}}"
+    rf"|0\d{{2,3}}(?:{_PHONE_SEP}\d{{3,4}}){{2}}"
+    rf")"
+    rf"(?![A-Za-z0-9])"
+)
 _LONG_DIGITS = re.compile(r"(?<!\d)\d{16,19}(?!\d)")
 _SECRET_ASSIGN = re.compile(
     r"(?i)(?:api[_-]?key|secret|password|passwd|pwd|access[_-]?key)\s*[:=]\s*[^\s,;，；]{6,}"
@@ -75,6 +87,33 @@ def luhn_ok(number: str) -> bool:
         checksum += digit
         double = not double
     return checksum % 10 == 0
+
+
+def _phone_digits(value: str) -> str:
+    digits = re.sub(r"\D", "", value)
+    if digits.startswith("86") and len(digits) >= 12:
+        digits = digits[2:]
+    return digits
+
+
+def _grouped_phone_ok(value: str) -> bool:
+    digits = _phone_digits(value)
+    if re.fullmatch(r"1[3-9]\d{9}", digits):
+        return True
+    return re.fullmatch(r"0\d{9,11}", digits) is not None
+
+
+def leading_phone(value: str) -> str:
+    """value 开头若是电话号码，返回这段原文。"""
+    for pattern in (_GROUPED_PHONE, _MOBILE, _LANDLINE):
+        match = pattern.match(value)
+        if match is None:
+            continue
+        found = match.group(0)
+        if pattern is _GROUPED_PHONE and not _grouped_phone_ok(found):
+            continue
+        return found
+    return ""
 
 
 def _valid_ip(value: str) -> bool:
@@ -122,6 +161,7 @@ def mask_sensitive(text: str, drop: DropFn) -> str:
     text = _sub_valid(_USCC, text, "信用代码", drop, is_valid_uscc)
     text = _sub_all(_MOBILE, text, "电话", drop)
     text = _sub_all(_LANDLINE, text, "电话", drop)
+    text = _sub_valid(_GROUPED_PHONE, text, "电话", drop, _grouped_phone_ok)
     text = _sub_valid(_LONG_DIGITS, text, "银行卡", drop, luhn_ok)
     text = _sub_all(_SECRET_ASSIGN, text, "凭据", drop)
     text = _sub_all(_SK_KEY, text, "凭据", drop)

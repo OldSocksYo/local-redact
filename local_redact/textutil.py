@@ -7,9 +7,8 @@ from pathlib import Path
 
 from local_redact.fields import LABELS, TOKEN_RE, Rule, normalize_label
 from local_redact.mapping import MappingBook
-from local_redact.patterns import mask_sensitive
+from local_redact.patterns import leading_phone, mask_sensitive
 
-_PHONE_VALUE = re.compile(r"(?:\+?86[-\s]?)?1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}")
 _PERSON_VALUE = re.compile(r"[\u4e00-\u9fffA-Za-z·•.]{2,20}")
 _COORD_VALUE = re.compile(r"[\d°度′'’＇″\"”＂.\s,，;；、东西南北经纬EeWwNnSs+\-]{4,80}")
 _LATIN_NAME = re.compile(r"^[A-Za-z][A-Za-z·•.\-]{1,19}$")
@@ -314,8 +313,7 @@ def _extract(value: str, mode: str) -> str:
     if not value:
         return ""
     if mode == "phone":
-        match = _PHONE_VALUE.match(value)
-        return match.group(0) if match else ""
+        return leading_phone(value)
     if mode == "person":
         match = _PERSON_VALUE.match(value)
         return match.group(0) if match else ""

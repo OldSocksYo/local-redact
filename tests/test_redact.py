@@ -304,6 +304,26 @@ class PatternTests(unittest.TestCase):
         self.assertEqual(mask_sensitive(serial, drop_marker), serial)
         self.assertEqual(mask_sensitive("742800NB023060061", drop_marker), "742800NB023060061")
 
+    def test_grouped_phones_keep_instrument_serial(self) -> None:
+        samples = [
+            "138 0013 8000",
+            "138-0013-8000",
+            "+86 138 0013 8000",
+            "(0571)88886666",
+            "（0571）88886666",
+            "0571-8888 6666",
+        ]
+        for sample in samples:
+            masked = mask_sensitive(f"前{sample}后", drop_marker)
+            self.assertNotIn(sample, masked, sample)
+            self.assertIn("[电话已移除]", masked)
+            self.assertIn("前", masked)
+            self.assertIn("后", masked)
+        mixed = mask_sensitive("编号671021S13800138000，电话138 0013 8000", drop_marker)
+        self.assertIn("671021S13800138000", mixed)
+        self.assertNotIn("138 0013 8000", mixed)
+        self.assertEqual(mask_sensitive(STANDARDS, drop_marker), STANDARDS)
+
     def test_id_and_uscc_checksum(self) -> None:
         self.assertTrue(is_valid_id_card("110101199003078515"))
         self.assertFalse(is_valid_id_card("110101199003078516"))
