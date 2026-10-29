@@ -12,11 +12,6 @@ from local_redact.patterns import mask_sensitive
 _PHONE_VALUE = re.compile(r"(?:\+?86[-\s]?)?1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}")
 _PERSON_VALUE = re.compile(r"[\u4e00-\u9fffA-Za-z·•.]{2,20}")
 _COORD_VALUE = re.compile(r"[\d°度′'’＇″\"”＂.\s,，;；、东西南北经纬EeWwNnSs+\-]{4,80}")
-# 页眉常见报告文号：华展环检字（2026）第0002-5号
-_REPORT_SERIAL = re.compile(
-    r"(?<![\u4e00-\u9fffA-Za-z0-9_])"
-    r"[\u4e00-\u9fffA-Za-z0-9]{2,40}字\s*[（(]\d{4}[）)]\s*第\s*[\d\-—～~]+\s*号"
-)
 
 
 def load_lexicon(path: Path) -> list[tuple[str, str | None]]:
@@ -133,7 +128,6 @@ class Redactor:
             return text
         updated = fold_digits(text)
         updated = self._inline(updated)
-        updated = self._report_serials(updated)
         updated = self._terms(updated)
         updated = mask_sensitive(updated, self.mapping.drop)
         return updated
@@ -152,16 +146,6 @@ class Redactor:
 
         return self._inline_re.sub(repl, text)
 
-    def _report_serials(self, text: str) -> str:
-        def repl(match: re.Match[str]) -> str:
-            found = match.group(0)
-            if _already_masked(found):
-                return found
-            replacement = self.token_for("报告", found)
-            self.propagate(found, replacement)
-            return replacement
-
-        return _REPORT_SERIAL.sub(repl, text)
 
     def _terms(self, text: str) -> str:
         pairs: list[tuple[str, str]] = []

@@ -68,8 +68,6 @@ FORM_LABELS: dict[str, Rule] = {
     # 机构通讯栏常见写法；须带冒号，避免叙述句里的「地址」被误伤
     "地址": _addr(),
     "通讯地址": _addr(),
-    "邮政编码": Rule(drop="邮编"),
-    "邮编": Rule(drop="邮编"),
 
     "联系人": _person(),
     "采样人": _person(),
@@ -97,11 +95,6 @@ FORM_LABELS: dict[str, Rule] = {
 }
 
 COLUMN_RULES: dict[str, Rule] = {
-    "样品编号": Rule(prefix="样品"),
-    "点位编号": Rule(prefix="样品"),
-    "报告编号": Rule(prefix="报告"),
-    "报告文号": Rule(prefix="报告"),
-    "报告号": Rule(prefix="报告"),
     "项目编号": Rule(prefix="项目号"),
     "工程编号": Rule(prefix="项目号"),
     "合同编号": Rule(prefix="合同"),
