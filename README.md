@@ -8,8 +8,8 @@
 
 ## 会去掉什么
 
-- 委托单位、受检单位、建设单位、项目名称、项目地址、地址/邮编、联系人、电话、采样/检测人员（含结果表人员列）和签字人
-- 报告编号、报告文号（含页眉「××字（年）第×号」）、项目编号、合同编号、样品编号、排污许可证号、统一社会信用代码。同一份报告里的编号会换成同一个代号，表和表之间仍能对上
+- 委托单位、受检单位、建设单位、项目名称、项目地址、地址、联系人、电话、采样/检测人员（含结果表人员列）和签字人
+- 项目编号、合同编号、排污许可证号、统一社会信用代码。同一份报告里的编号会换成同一个代号，表和表之间仍能对上
 - 经纬度，以及身份证、银行卡、邮箱、内网 IP、密钥
 - 正文、表格、文本框、页眉页脚、脚注、批注、文档属性里的上述内容
 - 图片、公章、签名、二维码、图片水印、文字水印、页面背景图。压缩包里的图片文件也会删掉，避免解压后还能看到原图
@@ -19,7 +19,7 @@
 
 - 检测结果、单位、检出限、采样日期
 - 标准号和方法依据，例如 `GB 3838-2002`、`HJ 828-2017`
-- 点位名称，例如 `1#排气筒`
+- 邮编、报告编号/文号（含页眉「××字（年）第×号」）、点位名称、点位编号、样品编号，例如 `610300`、`华展环检字（2026）第0002-5号`、`1#排气筒`
 - 本机构名称。不想保留时，把全称和简称写进词表
 
 ## 第一次准备
@@ -28,11 +28,10 @@
 
 ```bat
 cd /d D:\NoteFolder\MineFile\PersonelPro\local-redact
-python -m pip install -r requirements.txt
 copy lexicon.example.txt lexicon.txt
 ```
 
-本机需要 Python 3.11，命令用 `python`。依赖是 `lxml`、`pywin32` 和界面用的 `customtkinter`。处理 `.doc` 时还要安装 WPS 或 Microsoft Word。
+本机需要 Python 3.11，命令用 `python`。依赖是 `lxml`、`pywin32` 和界面用的 `customtkinter`；双击 `redact-gui.bat` / `redact.bat` 时若未安装会自动执行 `pip install -r requirements.txt`，也可手动先装一遍。处理 `.doc` 时还要安装 WPS 或 Microsoft Word。
 
 然后编辑 `lexicon.txt`。一行一个要替换的词：客户全称、简称、厂区地址、文件名里会写的短名称、两三字的人名。`#` 开头是注释。
 
@@ -49,10 +48,10 @@ copy lexicon.example.txt lexicon.txt
 
 ## 图形界面
 
-双击 `redact-gui.bat`，或：
+双击 `redact-gui.bat`（先检查依赖，再用与当前 `python` 同目录的 `pythonw` 开界面，避免 PATH 里其它解释器抢启动），或：
 
 ```bat
-python -m local_redact.gui
+pythonw -m local_redact.gui
 python -m local_redact --gui
 ```
 

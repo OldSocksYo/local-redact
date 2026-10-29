@@ -295,6 +295,15 @@ class PatternTests(unittest.TestCase):
         self.assertNotIn("东经120.1532", masked)
         self.assertNotIn("N30.25", masked)
 
+    def test_phone_masks_standalone_keeps_instrument_serial(self) -> None:
+        masked = mask_sensitive("电话13800138000，固话0571-88886666", drop_marker)
+        self.assertNotIn("13800138000", masked)
+        self.assertNotIn("0571-88886666", masked)
+        self.assertIn("[电话已移除]", masked)
+        serial = "671021S13800138000"
+        self.assertEqual(mask_sensitive(serial, drop_marker), serial)
+        self.assertEqual(mask_sensitive("742800NB023060061", drop_marker), "742800NB023060061")
+
     def test_id_and_uscc_checksum(self) -> None:
         self.assertTrue(is_valid_id_card("110101199003078515"))
         self.assertFalse(is_valid_id_card("110101199003078516"))
@@ -321,15 +330,15 @@ class FieldRedactTests(unittest.TestCase):
         self.assertIn("项目号_", out)
         self.assertNotIn("华金大道", out)
         self.assertIn("[地址已移除]", out)
-        self.assertIn("[邮编已移除]", out)
+        self.assertIn("610300", out)
+        self.assertNotIn("[邮编已移除]", out)
         self.assertIn("[电话已移除]", out)
 
-    def test_header_report_serial(self) -> None:
+    def test_header_report_serial_kept(self) -> None:
         redactor = self._redactor()
         out = redactor.redact_string("华展环检字（2026）第0002-5号  第 2 页 共 9 页")
-        self.assertNotIn("华展环检字", out)
-        self.assertNotIn("0002-5", out)
-        self.assertIn("报告_", out)
+        self.assertIn("华展环检字（2026）第0002-5号", out)
+        self.assertNotIn("报告_", out)
         self.assertIn("第 2 页 共 9 页", out)
 
     def test_staff_column_and_person_list(self) -> None:
@@ -338,6 +347,10 @@ class FieldRedactTests(unittest.TestCase):
 
         redactor = self._redactor()
         names = "李伟\n田超\n吴广"
+        note = (
+            "备注：检测类别为气体样品时，注明样品介质（如：吸附管、气袋、真空瓶、"
+            "全玻注射器、滤膜、滤筒、吸收液等），其他检测类别（噪声、振动除外）注明样品状态。"
+        )
         root = etree.Element(q(W, "document"))
         body = etree.SubElement(root, q(W, "body"))
         body.append(
@@ -353,6 +366,7 @@ class FieldRedactTests(unittest.TestCase):
                     "检测频次",
                 ),
                 row("有组织废气", "厂界", "YG260017-01", "气袋", "2026.6.22", names, "非甲烷总烃", "1天3次"),
+                row(note, "", "", "", "", "", "", ""),
             )
         )
         _redact_tables(root, redactor)
@@ -362,8 +376,32 @@ class FieldRedactTests(unittest.TestCase):
         self.assertNotIn("田超", joined)
         self.assertNotIn("吴广", joined)
         self.assertIn("人员_", joined)
+        self.assertIn("气袋", joined)
+        self.assertIn("滤膜", joined)
+        self.assertIn("真空瓶", joined)
+        self.assertIn("YG260017-01", joined)
         self.assertIn("非甲烷总烃", joined)
         self.assertIn("采样/检测人员", COLUMN_RULES)
+        self.assertNotIn("点位编号", COLUMN_RULES)
+        self.assertNotIn("样品编号", COLUMN_RULES)
+        self.assertNotIn("气袋", set(redactor.mapping.tokens.values()))
+        self.assertNotIn("滤膜", set(redactor.mapping.tokens.values()))
+
+    def test_person_rule_keeps_prose_and_non_names(self) -> None:
+        from local_redact.fields import COLUMN_RULES
+
+        redactor = self._redactor()
+        rule = COLUMN_RULES["采样/检测人员"]
+        note = "注明样品介质（如：吸附管、气袋、滤膜、滤筒、吸收液等）"
+        self.assertEqual(redactor.apply_rule(note, rule), note)
+        self.assertEqual(redactor.apply_rule("气袋", rule), "气袋")
+        self.assertEqual(redactor.apply_rule("气袋、滤膜、滤筒", rule), "气袋、滤膜、滤筒")
+        self.assertIn("人员_", redactor.apply_rule("李伟田超吴广", rule))
+        self.assertIn("人员_", redactor.apply_rule("李伟、田超、吴广", rule))
+        # 二字名+三字名无分隔（曾跃杰、许红强、宁建荣）
+        mixed = "李伟田超吴广曾跃杰许红强宁建荣"
+        self.assertIn("人员_", redactor.apply_rule(mixed, rule))
+        self.assertNotIn("李伟", redactor.apply_rule(mixed, rule))
 
 
 class ReportRedactTests(unittest.TestCase):
@@ -407,8 +445,6 @@ class ReportRedactTests(unittest.TestCase):
                 "13812345678",
                 "１３８１２３４５６７８",
                 "0571-88886666",
-                "S2024-001",
-                "S2024-002",
                 "东经",
                 "120°15",
                 "N30.25",
@@ -444,6 +480,8 @@ class ReportRedactTests(unittest.TestCase):
                 "120.5 mg/m3",
                 "8.8.8.8",
                 "化学需氧量",
+                "S2024-001",
+                "S2024-002",
                 "本次受测",
                 "废水",
                 "联系号码",
@@ -454,9 +492,7 @@ class ReportRedactTests(unittest.TestCase):
             mapping = json.loads((root / "mapping.json").read_text(encoding="utf-8"))
             originals = set(mapping["tokens"].values())
             self.assertIn(TABLE_CLIENT, originals)
-            self.assertIn("S2024-001", originals)
-            sample_token = next(token for token, original in mapping["tokens"].items() if original == "S2024-001")
-            self.assertGreaterEqual(text.count(sample_token), 2)
+            self.assertNotIn("S2024-001", originals)
             self.assertNotIn("mapping.json", [path.name for path in out.rglob("*")])
             self.assertFalse((out / ".redact-tmp").exists())
 
@@ -595,6 +631,16 @@ class ReportRedactTests(unittest.TestCase):
             first = Redactor([], secret, MappingBook(Path(folder) / "a.json")).token_for("机构", "同一家公司")
             second = Redactor([], secret, MappingBook(Path(folder) / "b.json")).token_for("机构", "同一家公司")
         self.assertEqual(first, second)
+
+    def test_load_empty_mapping_file(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "mapping.json"
+            path.write_text("", encoding="utf-8")
+            book = MappingBook(path)
+            book.load()
+            self.assertEqual(book.tokens, {})
+            self.assertEqual(book.files, {})
+            self.assertEqual(book.removed, {})
 
     def test_rejects_legacy_doc(self) -> None:
         redactor = Redactor([], b"0123456789abcdef", MappingBook(Path("mapping.json")))
