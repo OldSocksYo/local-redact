@@ -134,9 +134,19 @@ def looks_like_person_name(value: str) -> bool:
     return False
 
 
+def _read_lexicon_text(path: Path) -> str:
+    data = path.read_bytes()
+    if data.startswith(b"\xef\xbb\xbf"):
+        return data[3:].decode("utf-8")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("gb18030")
+
+
 def load_lexicon(path: Path) -> list[tuple[str, str | None]]:
     items: list[tuple[str, str | None]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in _read_lexicon_text(path).splitlines():
         raw = line.strip()
         if not raw or raw.startswith("#"):
             continue

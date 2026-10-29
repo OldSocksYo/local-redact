@@ -16,7 +16,7 @@ from local_redact.docx_redact import DocxError, redact_docx
 from local_redact.mapping import MappingBook
 from local_redact.names import OutputNames, redact_relative
 from local_redact.patterns import is_valid_id_card, is_valid_uscc, mask_sensitive, uscc_check_char
-from local_redact.textutil import Redactor
+from local_redact.textutil import Redactor, load_lexicon
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -482,6 +482,14 @@ class FieldRedactTests(unittest.TestCase):
             self.assertNotIn(secret, out, secret)
         self.assertIn("人员_", out)
         self.assertIn("机构_", out)
+
+    def test_lexicon_gb18030_and_bom(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "lexicon.txt"
+            path.write_bytes("张三 => 人员甲\n".encode("gb18030"))
+            self.assertEqual(load_lexicon(path), [("张三", "人员甲")])
+            path.write_bytes(b"\xef\xbb\xbf" + "示例企业\n".encode("utf-8"))
+            self.assertEqual(load_lexicon(path), [("示例企业", None)])
 
 
 class ReportRedactTests(unittest.TestCase):
