@@ -182,6 +182,15 @@ def _is_header_row(row: list[tuple[etree._Element, int, int]]) -> bool:
     return len(labels) >= 2 and all(label in HEADER_WORDS for label in labels)
 
 
+def _is_note_row(row: list[tuple[etree._Element, int, int]]) -> bool:
+    """表下「备注：…」说明行，不按人员/坐标等列规则打码。"""
+    for cell, _, _ in row:
+        text = _cell_text(cell).strip()
+        if text.startswith(("备注", "注：", "注:")):
+            return True
+    return False
+
+
 def _replace_cell(cell: etree._Element, redactor: Redactor, rule) -> None:
     raw = _cell_text(cell).strip()
     if not raw:
@@ -204,6 +213,8 @@ def _redact_tables(root: etree._Element, redactor: Redactor) -> None:
                 if key in COLUMN_RULES:
                     columns[col] = COLUMN_RULES[key]
             for row_index in range(start_row + 1, end_row):
+                if _is_note_row(rows[row_index]):
+                    continue
                 for col, rule in columns.items():
                     cell = _cell_at(rows[row_index], col)
                     if cell is not None:

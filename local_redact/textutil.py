@@ -12,6 +12,125 @@ from local_redact.patterns import mask_sensitive
 _PHONE_VALUE = re.compile(r"(?:\+?86[-\s]?)?1[3-9]\d{9}|0\d{2,3}[-\s]?\d{7,8}")
 _PERSON_VALUE = re.compile(r"[\u4e00-\u9fffA-Za-z·•.]{2,20}")
 _COORD_VALUE = re.compile(r"[\d°度′'’＇″\"”＂.\s,，;；、东西南北经纬EeWwNnSs+\-]{4,80}")
+_LATIN_NAME = re.compile(r"^[A-Za-z][A-Za-z·•.\-]{1,19}$")
+_CN_NAME = re.compile(r"^[\u4e00-\u9fff]{2,4}$")
+_CN_NAME_RUN = re.compile(r"^(?:[\u4e00-\u9fff]{2}){2,12}$")
+# 说明句/列举句特征：有这些就不当人员格处理
+_PROSE_PUNCT = re.compile(r"[：:。；;（）()《》【】]")
+# 《百家姓》单字姓。复姓走 _COMPOUND_SURNAMES，不把复姓拆字扩进来，以免误伤普通词。
+_SURNAMES = frozenset(
+    "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻柏水窦章"
+    "云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉岑薛雷贺倪汤滕殷罗毕郝邬安常"
+    "乐于时傅皮卞齐康伍余元卜顾孟平黄和穆萧尹姚邵湛汪祁毛禹狄米贝明臧计伏成戴谈宋茅"
+    "庞熊纪舒屈项祝董梁杜阮蓝闵席季麻强贾路娄危江童颜郭梅盛林刁钟徐邱骆高夏蔡田樊胡"
+    "凌霍虞万支柯昝管卢莫经房裘缪干解应宗丁宣贲邓郁单杭洪包诸左石崔吉钮龚程嵇邢滑裴"
+    "陆荣翁荀羊於惠甄麴家封芮羿储靳汲邴糜松井段富巫乌焦巴弓牧隗山谷车侯宓蓬全郗班仰"
+    "秋仲伊宫宁仇栾暴甘钭厉戎祖武符刘景詹束龙叶幸司韶郜黎蓟薄印宿白怀蒲邰从鄂索咸籍"
+    "赖卓蔺屠蒙池乔阴鬱胥能苍双闻莘党翟谭贡劳逄姬申扶堵冉宰郦雍舄璩桑桂濮牛寿通边扈"
+    "燕冀郏浦尚农温别庄晏柴瞿阎充慕连茹习宦艾鱼容向古易慎戈廖庾终暨居衡步都耿满弘匡"
+    "国文寇广禄阙东欧殳沃利蔚越夔隆师巩厍聂晁勾敖融冷訾辛阚那简饶空曾毋沙乜养鞠须丰"
+    "巢关蒯相查後荆红游竺权逯盖益桓公"
+)
+_COMPOUND_SURNAMES = frozenset(
+    {
+        "欧阳",
+        "太史",
+        "端木",
+        "上官",
+        "司马",
+        "东方",
+        "独孤",
+        "南宫",
+        "万俟",
+        "闻人",
+        "夏侯",
+        "诸葛",
+        "尉迟",
+        "公羊",
+        "赫连",
+        "澹台",
+        "皇甫",
+        "宗政",
+        "濮阳",
+        "公冶",
+        "太叔",
+        "申屠",
+        "公孙",
+        "慕容",
+        "仲孙",
+        "钟离",
+        "长孙",
+        "宇文",
+        "司徒",
+        "鲜于",
+        "司空",
+        "闾丘",
+        "子车",
+        "亓官",
+        "司寇",
+        "巫马",
+        "公西",
+        "颛孙",
+        "壤驷",
+        "公良",
+        "漆雕",
+        "乐正",
+        "宰父",
+        "谷梁",
+        "拓跋",
+        "夹谷",
+        "轩辕",
+        "令狐",
+        "段干",
+        "百里",
+        "东郭",
+        "南门",
+        "呼延",
+        "羊舌",
+        "微生",
+        "梁丘",
+        "左丘",
+        "东门",
+        "西门",
+        "南宫",
+        "第五",
+    }
+)
+
+
+def _is_prose_cell(value: str) -> bool:
+    """整格像说明/句子，而不是人名或人名列表。"""
+    text = value.strip()
+    if _PROSE_PUNCT.search(text):
+        return True
+    if "备注" in text or "注明" in text or text.endswith("等"):
+        return True
+    return False
+
+
+def looks_like_person_name(value: str) -> bool:
+    """像中国姓名（首字为常见姓）或拉丁姓名；不维护业务词黑名单。
+
+    人员格里常见「李伟田超吴广曾跃杰…」二字/三字名无分隔粘连，无法可靠切分时
+    仍把整段当人员打码（一个代号），避免真名残留。
+    """
+    text = value.strip()
+    if not text or len(text) > 40:
+        return False
+    if _LATIN_NAME.fullmatch(text):
+        return True
+    if _CN_NAME.fullmatch(text):
+        if text[:2] in _COMPOUND_SURNAMES:
+            return True
+        return text[0] in _SURNAMES
+    if _CN_NAME_RUN.fullmatch(text):
+        # 全是二字名粘连：李伟田超吴广
+        return all(text[i] in _SURNAMES for i in range(0, len(text), 2))
+    # 二字/三字名混粘（长度为奇数或无法均匀双字切）：整段打码
+    if re.fullmatch(r"[\u4e00-\u9fff]{4,40}", text):
+        if text[:2] in _COMPOUND_SURNAMES or text[0] in _SURNAMES:
+            return True
+    return False
 
 
 def load_lexicon(path: Path) -> list[tuple[str, str | None]]:
@@ -88,9 +207,14 @@ class Redactor:
         value = raw.strip()
         if not value or _already_masked(value):
             return value
-        # 人员列常见多人：换行或顿号分隔，逐个打码并传播到全文
-        if rule.value_mode == "person" and re.search(r"[\n\r、，,;；/／]", value):
-            return self._apply_person_list(value, rule)
+        # 人员列：先排除说明句，再按人名启发式打码（换行/顿号分隔的多人）
+        if rule.value_mode == "person":
+            if _is_prose_cell(value):
+                return value
+            if re.search(r"[\n\r、，,;；/／]", value):
+                return self._apply_person_list(value, rule)
+            if not looks_like_person_name(value):
+                return value
         return self._apply_one(value, rule)
 
     def _apply_one(self, value: str, rule: Rule) -> str:
@@ -117,7 +241,7 @@ class Redactor:
                 out.append(chunk)
                 continue
             person = chunk.strip()
-            if len(person) < 2:
+            if len(person) < 2 or not looks_like_person_name(person):
                 out.append(chunk)
                 continue
             out.append(self._apply_one(person, rule))
@@ -145,7 +269,6 @@ class Redactor:
             return match.group(0).replace(extracted, replacement, 1)
 
         return self._inline_re.sub(repl, text)
-
 
     def _terms(self, text: str) -> str:
         pairs: list[tuple[str, str]] = []
