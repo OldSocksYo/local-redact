@@ -207,6 +207,8 @@ def build_report(path: Path, uscc: str, id_card: str) -> None:
     comments = etree.Element(q(W, "comments"))
     comment = etree.SubElement(comments, q(W, "comment"))
     comment.set(q(W, "id"), "1")
+    comment.set(q(W, "author"), "报告编制人甲")
+    comment.set(q(W, "initials"), "甲")
     comment.append(paragraph(f"请复核{INLINE_CLIENT}的地址"))
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +229,8 @@ def build_report(path: Path, uscc: str, id_card: str) -> None:
             """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>""",
+  <Relationship Id="rIdThumb" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail" Target="docProps/thumbnail.jpeg"/>
+ </Relationships>""",
         )
         archive.writestr("word/comments.xml", xml_bytes(comments))
         archive.writestr("word/header1.xml", xml_bytes(header))
@@ -272,6 +275,37 @@ def build_report(path: Path, uscc: str, id_card: str) -> None:
   <Company>{TABLE_CLIENT}</Company>
   <Manager>张三</Manager>
 </Properties>""".encode("utf-8"),
+        )
+        archive.writestr("docProps/thumbnail.jpeg", b"THUMB-MARKER")
+        archive.writestr(
+            "docProps/custom.xml",
+            f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <property fmtid="{{D5CDD505-2E9C-101B-9397-08002B2CF9AE}}" pid="2" name="Company">
+    <vt:lpwstr>{TABLE_CLIENT}</vt:lpwstr>
+  </property>
+</Properties>""".encode("utf-8"),
+        )
+        archive.writestr(
+            "customXml/item1.xml",
+            f"<client>{TABLE_CLIENT}</client>".encode("utf-8"),
+        )
+        archive.writestr(
+            "word/settings.xml",
+            f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <w:attachedTemplate r:id="rIdTemplate"/>
+  <w:docVars>
+    <w:docVar w:name="客户" w:val="{TABLE_CLIENT}"/>
+  </w:docVars>
+</w:settings>""".encode("utf-8"),
+        )
+        archive.writestr(
+            "word/_rels/settings.xml.rels",
+            """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdTemplate" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate" Target="file:///C:/Users/报告编制人甲/template.dotx" TargetMode="External"/>
+</Relationships>""",
         )
 
 
@@ -549,8 +583,10 @@ class ReportRedactTests(unittest.TestCase):
             ):
                 self.assertNotIn(secret, text, secret)
 
-            for marker in (b"BGIMG-MARKER", b"BODYIMG-MARKER", b"WMIMG-MARKER", b"OLE-MARKER"):
+            for marker in (b"BGIMG-MARKER", b"BODYIMG-MARKER", b"WMIMG-MARKER", b"OLE-MARKER", b"THUMB-MARKER"):
                 self.assertNotIn(marker, blob)
+            self.assertNotIn("file:///C:/Users/", text)
+            self.assertNotIn("thumbnail.jpeg", text)
 
             for kept in (
                 "保留检测机构",
@@ -588,6 +624,7 @@ class ReportRedactTests(unittest.TestCase):
                 names = set(archive.namelist())
                 self.assertNotIn("word/media/bg.png", names)
                 self.assertNotIn("word/embeddings/oleObject1.bin", names)
+                self.assertNotIn("docProps/thumbnail.jpeg", names)
                 rels = etree.fromstring(archive.read("word/_rels/document.xml.rels"))
                 targets = [rel.get("Target") for rel in rels]
                 self.assertIn("header1.xml", targets)

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import posixpath
+import re
 import zipfile
 from pathlib import Path
 
 from lxml import etree
 
-from local_redact.fields import COLUMN_RULES, HEADER_WORDS, LABELS, normalize_label
+from local_redact.fields import COLUMN_RULES, HEADER_WORDS, LABELS, Rule, normalize_label
 from local_redact.textutil import Redactor
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
@@ -29,6 +30,27 @@ _SKIP_PARTS = {
     "word/numbering.xml",
 }
 _DROP_REL_SUFFIXES = ("/image", "/oleObject", "/package")
+_IDENTITY_ATTRS = {"author", "initials", "userid"}
+_SENSITIVE_PROP_NAMES = {
+    "company",
+    "manager",
+    "creator",
+    "lastauthor",
+    "owner",
+    "operator",
+    "lastmodifiedby",
+}
+_SKIP_VALUE_ATTRS = {
+    "fmtid",
+    "pid",
+    "id",
+    "idref",
+    "contenttype",
+    "uri",
+    "type",
+    "target",
+    "targetmode",
+}
 
 
 class DocxError(Exception):
@@ -62,9 +84,13 @@ def redact_docx(src: Path, dest: Path, redactor: Redactor) -> dict[str, int]:
     shapes = 0
     for name, root in roots.items():
         shapes += _remove_visuals(root)
+        _redact_identity_attrs(root, redactor)
         package.files[name] = _serialize_xml(root)
 
     _redact_properties(package, redactor)
+    _redact_settings(package, redactor)
+    _redact_custom_parts(package, redactor)
+    _scrub_package_leaks(package, redactor)
     media = _cleanup_package(package, redactor)
     dest.parent.mkdir(parents=True, exist_ok=True)
     package.save(dest)
@@ -191,7 +217,7 @@ def _is_note_row(row: list[tuple[etree._Element, int, int]]) -> bool:
     return False
 
 
-def _replace_cell(cell: etree._Element, redactor: Redactor, rule) -> None:
+def _replace_cell(cell: etree._Element, redactor: Redactor, rule: Rule) -> None:
     raw = _cell_text(cell).strip()
     if not raw:
         return
@@ -228,7 +254,14 @@ def _redact_tables(root: etree._Element, redactor: Redactor) -> None:
                 _redact_label_cell(rows, row_index, cell, col, span, redactor)
 
 
-def _redact_label_cell(rows, row_index: int, cell, col: int, span: int, redactor: Redactor) -> None:
+def _redact_label_cell(
+    rows: list[list[tuple[etree._Element, int, int]]],
+    row_index: int,
+    cell: etree._Element,
+    col: int,
+    span: int,
+    redactor: Redactor,
+) -> None:
     paragraphs = _cell_paragraphs(cell)
     texts = [_paragraph_text(paragraph).strip() for paragraph in paragraphs]
     key = normalize_label(texts[0]) if texts else ""
@@ -354,6 +387,7 @@ def _redact_properties(package: _DocxPackage, redactor: Redactor) -> None:
                 updated = redactor.redact_string(element.text)
                 if updated != element.text:
                     element.text = updated
+        _redact_identity_attrs(root, redactor)
         package.files[core_name] = _serialize_xml(root)
     app_name = "docProps/app.xml"
     if app_name in package.files:
@@ -363,7 +397,181 @@ def _redact_properties(package: _DocxPackage, redactor: Redactor) -> None:
             if local in {"Company", "Manager"} and (element.text or "").strip():
                 redactor.mapping.drop("文档属性", element.text.strip())
                 element.text = ""
+        _redact_identity_attrs(root, redactor)
         package.files[app_name] = _serialize_xml(root)
+
+
+def _attr_local(element: etree._Element, local_name: str) -> str:
+    for attr, value in element.attrib.items():
+        if attr.rsplit("}", 1)[-1].lower() == local_name.lower():
+            return value
+    return ""
+
+
+def _named_attr(element: etree._Element, local_name: str) -> str | None:
+    for attr in element.attrib:
+        if attr.rsplit("}", 1)[-1] == local_name:
+            return attr
+    return None
+
+
+def _redact_identity_attrs(root: etree._Element, redactor: Redactor) -> None:
+    """批注、修订、人员部件上的作者名。正文替换不会碰到这些属性。"""
+    for element in root.iter():
+        for attr, value in list(element.attrib.items()):
+            local = attr.rsplit("}", 1)[-1].lower()
+            if local not in _IDENTITY_ATTRS:
+                continue
+            text = value.strip()
+            if not text or text == "已脱敏":
+                continue
+            redactor.mapping.drop("文档属性", text)
+            element.set(attr, "已脱敏")
+
+
+def _redact_settings(package: _DocxPackage, redactor: Redactor) -> None:
+    name = "word/settings.xml"
+    if name not in package.files:
+        return
+    root = _parse_xml(package.files[name])
+    for element in root.iter():
+        if element.tag.rsplit("}", 1)[-1] != "docVar":
+            continue
+        val_attr = _named_attr(element, "val")
+        if val_attr is None:
+            continue
+        old = element.get(val_attr) or ""
+        if not old.strip():
+            continue
+        if _is_path_text(old):
+            redactor.mapping.drop("文档属性", old.strip())
+            element.set(val_attr, "")
+            continue
+        updated = redactor.redact_string(old)
+        if updated != old:
+            element.set(val_attr, updated)
+    _redact_identity_attrs(root, redactor)
+    package.files[name] = _serialize_xml(root)
+
+
+def _redact_custom_parts(package: _DocxPackage, redactor: Redactor) -> None:
+    names = [
+        name
+        for name in package.files
+        if name == "docProps/custom.xml" or (name.startswith("customXml/") and name.endswith(".xml"))
+    ]
+    for name in names:
+        root = _parse_xml(package.files[name])
+        _redact_loose_xml(root, redactor)
+        _redact_identity_attrs(root, redactor)
+        package.files[name] = _serialize_xml(root)
+
+
+def _redact_loose_xml(root: etree._Element, redactor: Redactor) -> None:
+    cleared: set[int] = set()
+    for element in root.iter():
+        if id(element) in cleared:
+            continue
+        local = element.tag.rsplit("}", 1)[-1].lower()
+        prop_name = _attr_local(element, "name").strip().lower()
+        if local == "property" and prop_name in _SENSITIVE_PROP_NAMES:
+            for node in element.iter():
+                cleared.add(id(node))
+                if node.text and node.text.strip():
+                    redactor.mapping.drop("文档属性", node.text.strip())
+                    node.text = ""
+            continue
+        if element.text and element.text.strip():
+            updated = redactor.redact_string(element.text)
+            if updated != element.text:
+                element.text = updated
+        for attr, value in list(element.attrib.items()):
+            attr_name = attr.rsplit("}", 1)[-1].lower()
+            if attr_name in _SKIP_VALUE_ATTRS or attr_name in _IDENTITY_ATTRS or not value.strip():
+                continue
+            updated = redactor.redact_string(value)
+            if updated != value:
+                element.set(attr, updated)
+
+
+def _is_local_target(target: str) -> bool:
+    text = target.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered.startswith("file:"):
+        return True
+    if text.startswith("\\\\") or text.startswith("//"):
+        return True
+    return re.match(r"^[A-Za-z]:[\\/]", text) is not None
+
+
+def _is_path_text(value: str) -> bool:
+    return _is_local_target(value) or ":\\" in value or "/Users/" in value or "\\Users\\" in value
+
+
+def _target_is_thumbnail(target: str) -> bool:
+    leaf = target.replace("\\", "/").split("?", 1)[0].rstrip("/").rsplit("/", 1)[-1].lower()
+    return leaf.startswith("thumbnail.")
+
+
+def _unlink_rel_ids(root: etree._Element, removed_ids: set[str]) -> bool:
+    if not removed_ids:
+        return False
+    changed = False
+    for element in list(root.iter()):
+        for attr, value in list(element.attrib.items()):
+            if value not in removed_ids or not attr.startswith(R):
+                continue
+            parent = element.getparent()
+            if parent is not None:
+                parent.remove(element)
+            else:
+                del element.attrib[attr]
+            changed = True
+            break
+    return changed
+
+
+def _scrub_package_leaks(package: _DocxPackage, redactor: Redactor) -> None:
+    """首页缩略图，以及指向本机路径的外部关系（模板、邮件合并数据源）。"""
+    for name in list(package.files):
+        leaf = name.rsplit("/", 1)[-1].lower()
+        if name.startswith("docProps/") and leaf.startswith("thumbnail"):
+            del package.files[name]
+    for name in list(package.files):
+        if not name.endswith(".rels"):
+            continue
+        root = _parse_xml(package.files[name])
+        removed_ids: set[str] = set()
+        changed = False
+        for rel in list(root):
+            if rel.tag != f"{PKG_REL}Relationship":
+                continue
+            target = rel.get("Target") or ""
+            rel_type = rel.get("Type") or ""
+            mode = rel.get("TargetMode") or ""
+            drop = False
+            if "thumbnail" in rel_type.lower() or _target_is_thumbnail(target):
+                drop = True
+            elif mode == "External" and _is_local_target(target):
+                redactor.mapping.drop("链接", target)
+                drop = True
+            if not drop:
+                continue
+            rel_id = rel.get("Id")
+            if rel_id:
+                removed_ids.add(rel_id)
+            root.remove(rel)
+            changed = True
+        if not changed:
+            continue
+        package.files[name] = _serialize_xml(root)
+        part = _part_of_rels(name)
+        if part and part in package.files and part.endswith(".xml"):
+            part_root = _parse_xml(package.files[part])
+            if _unlink_rel_ids(part_root, removed_ids):
+                package.files[part] = _serialize_xml(part_root)
 
 
 def _referenced_ids(root: etree._Element) -> set[str]:
