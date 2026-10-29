@@ -18,7 +18,18 @@ class MappingBook:
     def load(self) -> None:
         if not self.path.exists():
             return
-        data = json.loads(self.path.read_text(encoding="utf-8"))
+        raw = self.path.read_text(encoding="utf-8").strip()
+        # 允许用户直接清空文件；空内容按新对照表处理
+        if not raw:
+            return
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"对照表不是合法 JSON：{self.path}。可删掉该文件或清空后重试。"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"对照表格式不对（应为对象）：{self.path}")
         self.tokens.update(data.get("tokens") or {})
         self.files.update(data.get("files") or {})
         for kind, values in (data.get("removed") or {}).items():
