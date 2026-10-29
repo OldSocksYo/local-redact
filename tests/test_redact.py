@@ -4,6 +4,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -766,6 +767,93 @@ class ReportRedactTests(unittest.TestCase):
             self.assertEqual(book.tokens, {})
             self.assertEqual(book.files, {})
             self.assertEqual(book.removed, {})
+
+    def test_clears_previous_output(self) -> None:
+        uscc = "91330000MA27U1XX0" + uscc_check_char("91330000MA27U1XX0")
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            src = root / "in" / "检测报告.docx"
+            build_report(src, uscc, "110101199003078515")
+            out = root / "out"
+            stale_dir = out / "上一批"
+            stale_dir.mkdir(parents=True)
+            (stale_dir / "旧报告.docx").write_bytes(b"STALE-SECRET")
+            (out / "旧文件.docx").write_bytes(b"STALE-SECRET")
+            lexicon = root / "lexicon.txt"
+            lexicon.write_text("# 空词表\n", encoding="utf-8")
+            code = main(
+                [
+                    str(src.parent),
+                    "-o",
+                    str(out),
+                    "--lexicon",
+                    str(lexicon),
+                    "--map",
+                    str(root / "mapping.json"),
+                    "--secret",
+                    str(root / "secret.key"),
+                ]
+            )
+            self.assertEqual(code, 0)
+            self.assertFalse((out / "旧文件.docx").exists())
+            self.assertFalse(stale_dir.exists())
+            self.assertTrue(list(out.rglob("*.docx")))
+            blob = b"".join(path.read_bytes() for path in out.rglob("*") if path.is_file())
+            self.assertNotIn(b"STALE-SECRET", blob)
+
+    def test_refuses_to_wipe_output_that_contains_source(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            out = root / "out"
+            src = out / "原稿.docx"
+            src.parent.mkdir()
+            src.write_bytes(b"keep-me")
+            err = StringIO()
+            with patch("sys.stderr", err), patch("sys.stdout", StringIO()):
+                code = main(
+                    [
+                        str(src),
+                        "-o",
+                        str(out),
+                        "--map",
+                        str(root / "mapping.json"),
+                        "--secret",
+                        str(root / "secret.key"),
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("误删", err.getvalue())
+            self.assertEqual(src.read_bytes(), b"keep-me")
+
+    def test_unexpected_error_includes_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            src = root / "原稿.docx"
+            src.write_bytes(b"dummy")
+            lexicon = root / "lexicon.txt"
+            lexicon.write_text("# 空词表\n", encoding="utf-8")
+            err = StringIO()
+            with (
+                patch("local_redact.cli.redact_docx", side_effect=RuntimeError("boom")),
+                patch("sys.stderr", err),
+                patch("sys.stdout", StringIO()),
+            ):
+                code = main(
+                    [
+                        str(src),
+                        "-o",
+                        str(root / "out"),
+                        "--lexicon",
+                        str(lexicon),
+                        "--map",
+                        str(root / "mapping.json"),
+                        "--secret",
+                        str(root / "secret.key"),
+                    ]
+                )
+            self.assertEqual(code, 1)
+            self.assertIn("Traceback", err.getvalue())
+            self.assertIn("boom", err.getvalue())
 
     def test_rejects_legacy_doc(self) -> None:
         redactor = Redactor([], b"0123456789abcdef", MappingBook(Path("mapping.json")))

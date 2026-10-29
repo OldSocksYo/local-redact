@@ -8,6 +8,7 @@ import secrets
 import shutil
 import sys
 import tempfile
+import traceback
 from pathlib import Path
 
 from local_redact.convert import DocConversionError, WordSession
@@ -59,6 +60,57 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _path_inside(child: Path, parent: Path) -> bool:
+    try:
+        child_resolved = child.resolve()
+        parent_resolved = parent.resolve()
+    except OSError:
+        return False
+    return child_resolved == parent_resolved or child_resolved.is_relative_to(parent_resolved)
+
+
+def _output_conflict(
+    src: Path,
+    output: Path,
+    mapping_path: Path,
+    secret_path: Path,
+    lexicon_path: Path | None,
+) -> str | None:
+    try:
+        resolved = output.resolve()
+    except OSError as exc:
+        return f"无法使用输出目录：{exc}"
+    if resolved == Path(resolved.anchor):
+        return "输出目录不能是磁盘根目录。"
+    try:
+        if resolved == ROOT.resolve():
+            return "输出目录不能是项目目录。"
+    except OSError:
+        pass
+    if _path_inside(mapping_path, output):
+        return "对照表不能放在输出目录里。"
+    if _path_inside(secret_path, output):
+        return "密钥不能放在输出目录里。"
+    if lexicon_path is not None and _path_inside(lexicon_path, output):
+        return "词表不能放在输出目录里。"
+    if src.is_dir() and _path_inside(output, src):
+        return "输出目录不要放在输入目录里面。"
+    if _path_inside(src, output):
+        return "输出目录里还有输入文件，已停止，避免误删原稿。"
+    return None
+
+
+def _clear_output(output: Path) -> bool:
+    removed = False
+    for child in list(output.iterdir()):
+        removed = True
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    return removed
+
+
 def _configure_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
@@ -78,30 +130,29 @@ def main(argv: list[str] | None = None) -> int:
     if not src.exists():
         print(f"找不到输入：{src}", file=sys.stderr)
         return 1
-    if src.is_dir():
-        try:
-            if output.resolve().is_relative_to(src.resolve()):
-                print("输出目录不要放在输入目录里面。", file=sys.stderr)
-                return 1
-        except OSError:
-            pass
-    try:
-        if args.map.resolve().is_relative_to(output.resolve()):
-            print("对照表不能放在输出目录里。", file=sys.stderr)
-            return 1
-    except OSError:
-        pass
 
     lexicon_path = args.lexicon
     if lexicon_path is None:
         default_lexicon = ROOT / "lexicon.txt"
         lexicon_path = default_lexicon if default_lexicon.exists() else None
+    if lexicon_path is not None and not lexicon_path.exists():
+        print(f"找不到词表：{lexicon_path}", file=sys.stderr)
+        return 1
+    conflict = _output_conflict(src, output, args.map, args.secret, lexicon_path)
+    if conflict is not None:
+        print(conflict, file=sys.stderr)
+        return 1
+
     lexicon = []
     if lexicon_path is not None:
-        if not lexicon_path.exists():
-            print(f"找不到词表：{lexicon_path}", file=sys.stderr)
+        try:
+            lexicon = load_lexicon(lexicon_path)
+        except UnicodeDecodeError:
+            print(f"词表编码无法识别，请另存为 UTF-8：{lexicon_path}", file=sys.stderr)
             return 1
-        lexicon = load_lexicon(lexicon_path)
+        except OSError as exc:
+            print(f"无法读取词表：{exc}", file=sys.stderr)
+            return 1
         print(f"词表：{lexicon_path}（{len(lexicon)} 条）")
     else:
         print("未使用词表，只按栏目和固定格式脱敏。两三字的人名需要写入词表。")
@@ -111,6 +162,13 @@ def main(argv: list[str] | None = None) -> int:
         print("没有找到 .doc 或 .docx 文件。", file=sys.stderr)
         return 1
 
+    try:
+        cleared = _clear_output(output) if output.exists() else False
+    except OSError as exc:
+        print(f"无法清空输出目录：{exc}", file=sys.stderr)
+        return 1
+    if cleared:
+        print(f"已清空输出目录：{output}")
     output.mkdir(parents=True, exist_ok=True)
     mapping = MappingBook(args.map)
     mapping.load()
@@ -153,9 +211,10 @@ def main(argv: list[str] | None = None) -> int:
                 failed += 1
                 print(f"[{index}/{len(files)}] 失败 {relative}：{exc}")
                 continue
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 failed += 1
-                print(f"[{index}/{len(files)}] 失败 {relative}：{exc}")
+                print(f"[{index}/{len(files)}] 失败 {relative}")
+                traceback.print_exc()
                 continue
             finally:
                 if tmp_path.exists():
