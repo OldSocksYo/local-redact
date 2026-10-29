@@ -29,8 +29,9 @@ _EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _URL = re.compile(r"https?://[^\s<>\"']+")
 _ID_CARD = re.compile(r"(?<!\d)\d{17}[\dXx](?!\d)")
 _USCC = re.compile(r"(?<![0-9A-Z])[0-9A-Z]{18}(?![0-9A-Z])")
-_MOBILE = re.compile(r"(?<!\d)(?:\+?86[-\s]?)?1[3-9]\d{9}(?!\d)")
-_LANDLINE = re.compile(r"(?<!\d)0\d{2,3}[-\s]?\d{7,8}(?!\d)")
+# 前后都不能是字母/数字，避免仪器编号里「S138…」「NB023…」这类片段被当成电话
+_MOBILE = re.compile(r"(?<![A-Za-z0-9])(?:\+?86[-\s]?)?1[3-9]\d{9}(?![A-Za-z0-9])")
+_LANDLINE = re.compile(r"(?<![A-Za-z0-9])0\d{2,3}[-\s]?\d{7,8}(?![A-Za-z0-9])")
 _LONG_DIGITS = re.compile(r"(?<!\d)\d{16,19}(?!\d)")
 _SECRET_ASSIGN = re.compile(
     r"(?i)(?:api[_-]?key|secret|password|passwd|pwd|access[_-]?key)\s*[:=]\s*[^\s,;，；]{6,}"
